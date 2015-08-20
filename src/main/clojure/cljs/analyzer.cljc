@@ -482,6 +482,10 @@
 (defn get-col [x env]
   (or (-> x meta :column) (:column env)))
 
+(defn get-extern-properties [x]
+  (vec (map (comp munge symbol)
+            (-> x name (string/split #"\.")))))
+
 (defn intern-macros
   "Given a Clojure namespace intern all macros into the ambient ClojureScript
    analysis environment."
@@ -2096,26 +2100,33 @@
         enve       (assoc env :context :expr)
         targetexpr (analyze enve target)
         form-meta  (meta form)
-        tag        (:tag form-meta)]
-    (case dot-action
-      ::access (let [children [targetexpr]]
-                 {:op :dot
-                  :env env
-                  :form form
-                  :target targetexpr
-                  :field field
-                  :children children
-                  :tag tag})
-      ::call   (let [argexprs (map #(analyze enve %) args)
-                     children (into [targetexpr] argexprs)]
-                 {:op :dot
-                  :env env
-                  :form form
-                  :target targetexpr
-                  :method method
-                  :args argexprs
-                  :children children
-                  :tag tag}))))
+        tag        (:tag form-meta)
+        ast-node   (case dot-action
+                     ::access (let [children [targetexpr]]
+                                {:op :dot
+                                 :env env
+                                 :form form
+                                 :target targetexpr
+                                 :field field
+                                 :children children
+                                 :tag tag})
+                     ::call   (let [argexprs (map #(analyze enve %) args)
+                                    children (into [targetexpr] argexprs)]
+                                    {:op :dot
+                                     :env env
+                                     :form form
+                                     :target targetexpr
+                                     :method method
+                                     :args argexprs
+                                     :children children
+                                     :tag tag}))
+        extern (when-let [extern (:extern targetexpr)]
+                 (vec (concat extern (get-extern-properties (or (:field ast-node)
+                                                                (:method ast-node))))))]
+    (when extern
+      (swap! env/*compiler* assoc-in [:externs extern] ast-node))
+    (cond-> ast-node
+      extern (assoc :extern extern))))
 
 (defmethod parse '.
   [_ env [_ target & [field & member+] :as form] _ _]
@@ -2291,14 +2302,21 @@
           lb   (get lcls sym)]
       (if-not (nil? lb)
         (assoc ret :op :var :info lb)
-        (if-not (true? (:def-var env))
-          (let [sym-meta (meta sym)
-                info     (if-not (contains? sym-meta ::analyzed)
-                           (resolve-existing-var env sym)
-                           (resolve-var env sym))]
-            (assoc ret :op :var :info info))
-          (let [info (resolve-var env sym)]
-            (assoc ret :op :var :info info)))))))
+        (let [ast-node (if-not (true? (:def-var env))
+                         (let [sym-meta (meta sym)
+                               info     (if-not (contains? sym-meta ::analyzed)
+                                          (resolve-existing-var env sym)
+                                          (resolve-var env sym))]
+                           (assoc ret :op :var :info info))
+                         (let [info (resolve-var env sym)]
+                           (assoc ret :op :var :info info)))
+              extern   (when (and (= (get-in ast-node [:info :ns]) 'js)
+                                  (not (.startsWith "goog" (name sym))))
+                         (get-extern-properties sym))]
+          (when extern
+            (swap! env/*compiler* assoc-in [:externs extern] ast-node))
+          (cond-> ast-node
+            extern (assoc :extern extern)))))))
 
 (defn excluded?
   #?(:cljs {:tag boolean})

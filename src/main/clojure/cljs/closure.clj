@@ -58,8 +58,8 @@
               CommandLineRunner AnonymousFunctionNamingPolicy
               JSModule JSModuleGraph SourceMap ProcessCommonJSModules
               ES6ModuleLoader AbstractCompiler TransformAMDToCJSModule
-              ProcessEs6Modules CompilerInput]
-           [com.google.javascript.rhino Node]
+              ProcessEs6Modules CompilerInput JsAst]
+           [com.google.javascript.rhino Node Token]
            [java.security MessageDigest]
            [javax.xml.bind DatatypeConverter]
            [java.nio.file Path Paths Files StandardWatchEventKinds WatchKey
@@ -289,6 +289,89 @@
       (set-options opts compiler-options)
       compiler-options)))
 
+(declare javascript-name make-closure-compiler)
+
+(defmulti parse-extern-node (fn [^Node node] (.getType node)))
+
+(defmethod parse-extern-node Token/VAR [node]
+  (when (> (.getChildCount node) 0)
+    (parse-extern-node (.getFirstChild node))))
+
+(defmethod parse-extern-node Token/EXPR_RESULT [node]
+  (when (> (.getChildCount node) 0)
+    (parse-extern-node (.getFirstChild node))))
+
+(defmethod parse-extern-node Token/ASSIGN [node]
+  (when (> (.getChildCount node) 0)
+    (let [lhs (first (parse-extern-node (.getFirstChild node)))]
+      (if (> (.getChildCount node) 1)
+        (let [externs (parse-extern-node (.getChildAtIndex node 1))]
+          (conj (map (fn [ext] (concat lhs ext)) externs)
+                lhs))
+        [lhs]))))
+
+(defmethod parse-extern-node Token/NAME [node]
+  (let [lhs (map symbol (string/split (.getQualifiedName node) #"\."))]
+    (if (> (.getChildCount node) 0)
+      (let [externs (parse-extern-node (.getFirstChild node))]
+        (conj (map (fn [ext] (concat lhs ext)) externs)
+              lhs))
+      [lhs])))
+
+(defmethod parse-extern-node Token/GETPROP [node]
+  [(map symbol (string/split (.getQualifiedName node) #"\."))])
+
+(defmethod parse-extern-node Token/OBJECTLIT [node]
+  (when (> (.getChildCount node) 0)
+    (loop [nodes (.children node)
+           externs []]
+      (if (empty? nodes)
+        externs
+        (recur (rest nodes)
+               (concat externs (parse-extern-node (first nodes))))))))
+
+(defmethod parse-extern-node Token/STRING_KEY [node]
+  (let [lhs (map symbol (string/split (.getString node) #"\."))]
+    (if (> (.getChildCount node) 0)
+      (let [externs (parse-extern-node (.getFirstChild node))]
+        (conj (map (fn [ext] (concat lhs ext)) externs)
+              lhs))
+      [lhs])))
+
+(defmethod parse-extern-node :default [node])
+
+(defn parse-externs [ext]
+  (let [^SourceFile source-file (if (instance? SourceFile ext)
+                                  ext
+                                  (js-source-file (javascript-name ext) ext))
+        ^CompilerOptions compiler-options (CompilerOptions.)
+        closure-compiler (doto (make-closure-compiler)
+                           (.init (list source-file) '() compiler-options))
+        js-ast (JsAst. source-file)
+        ^Node root (.getAstRoot js-ast closure-compiler)]
+    (loop [nodes (.children root)
+           externs []]
+      (if (empty? nodes)
+        externs
+        (let [node (first nodes)
+              new-extern (parse-extern-node node)]
+            (recur (rest nodes) (concat externs new-extern)))))))
+
+(defn generate-externs [opts existing-ext]
+  (let [all-externs (reduce (fn [all ext]
+                              (clojure.set/union all (set (parse-externs ext))))
+                            #{} existing-ext)
+        new-externs (into (sorted-map)
+                          (filter (fn [[k v]] (not (contains? all-externs k)))
+                                  (:externs @env/*compiler*)))]
+    (with-out-str
+      (doseq [[[name] ast-node] (filter (fn [[k v]] (= (count k) 1)) new-externs)]
+        (print (str "var " name " = {};")))
+      (doseq [[k ast-node] (filter (fn [[k v]] (> (count k) 1)) new-externs)]
+        (if (:field ast-node)
+          (print (str (string/join "." k) " = {};"))
+          (print (str (string/join "." k) " = function(){};")))))))
+
 (defn load-externs
   "Externs are JavaScript files which contain empty definitions of
   functions which will be provided by the environment. Any function in
@@ -297,7 +380,7 @@
   Options may contain an :externs key with a list of file paths to
   load. The :use-only-custom-externs flag may be used to indicate that
   the default externs should be excluded."
-  [{:keys [externs use-only-custom-externs target ups-externs]}]
+  [{:keys [externs use-only-custom-externs target ups-externs] :as opts}]
   (let [validate (fn validate [p us]
                    (if (empty? us)
                      (throw (IllegalArgumentException.
@@ -321,10 +404,12 @@
                   (map #(js-source-file (.getFile %) (slurp %)) ext))]
     (let [js-sources (-> externs filter-js add-target load-js)
           ups-sources (-> ups-externs filter-cp-js load-js)
-          all-sources (concat js-sources ups-sources)] 
-      (if use-only-custom-externs
-        all-sources
-        (into all-sources (CommandLineRunner/getDefaultExterns))))))
+          all-sources (cond-> (concat js-sources ups-sources)
+                        (not use-only-custom-externs)
+                        (into (CommandLineRunner/getDefaultExterns)))
+          generated-externs (generate-externs opts all-sources)]
+      (conj all-sources (js-source-file (javascript-name generated-externs)
+                                        generated-externs)))))
 
 (defn ^com.google.javascript.jscomp.Compiler make-closure-compiler []
   (let [compiler (com.google.javascript.jscomp.Compiler.)]
@@ -948,6 +1033,8 @@
   (if-let [name (first (deps/-provides s))] name "cljs/user.js"))
 
 (defmethod javascript-name JavaScriptFile [js] (javascript-name (deps/-url js)))
+
+(defmethod javascript-name File [^File file] (.getName file))
 
 (defn build-provides
   "Given a vector of provides, builds required goog.provide statements"
