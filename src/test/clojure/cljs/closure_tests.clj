@@ -37,7 +37,7 @@
     (is (check-source-map {:source-map false :optimizations :none}))
     (is (thrown? AssertionError (check-source-map {:source-map "target/build/app.js.map" :optimizations :none})))))
 
-(deftest test-parse-extern
+(deftest test-parse-externs
   (testing "var"
     (is (= (parse-externs "var foo = {}; var bar = function(){}")
            [['foo] ['bar]])))

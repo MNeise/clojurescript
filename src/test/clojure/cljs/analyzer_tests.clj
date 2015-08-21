@@ -335,3 +335,8 @@
           (catch Exception e
             (.getMessage e)))
         "Can't set! a constant")))
+
+(deftest test-extern
+  (is (= (:extern (a/analyze test-env 'js/foo)) ['foo]))
+  (is (= (:extern (a/analyze test-env '(.bar js/foo)) ['foo 'bar])))
+  (is (= (:extern (a/analyze test-env '(.-bar js/foo)) ['foo 'bar]))))
