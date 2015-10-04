@@ -60,6 +60,6 @@
              "var baz = {};var foo = {};foo.bar = {};")))
     (testing "existing externs"
       (is (= (env/with-compiler-env (env/default-compiler-env {})
-               (ana/analyze user-env '(do (.-bar js/foo) (.baz js/window))
+               (ana/analyze user-env '(do (.-bar js/foo) (.baz js/window)))
                (generate-externs {} ["var baz = function(){};"]))
-               "var foo = {};foo.bar = {};"))))))
+               "var foo = {};var window = {};foo.bar = {};window.baz = function(){};")))))
