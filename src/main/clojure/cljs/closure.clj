@@ -355,7 +355,22 @@
         externs
         (let [node (first nodes)
               new-extern (parse-extern-node node)]
-            (recur (rest nodes) (concat externs new-extern)))))))
+          (recur (rest nodes) (concat externs new-extern)))))))
+
+(defmulti output-extern (fn [[k v]] (:op v)))
+
+(defmethod output-extern :var [[[x & xs] v]]
+  (print (str "var " x " = {};"))
+  (->> xs
+       (reductions conj [x])
+       rest
+       (map #(print (str (string/join "." %) " = {};")))
+       doall))
+
+(defmethod output-extern :dot [[k v]]
+  (if (:field v)
+    (print (str (string/join "." k) " = {};"))
+    (print (str (string/join "." k) " = function(){};"))))
 
 (defn generate-externs [opts existing-ext]
   (let [all-externs (reduce (fn [all ext]
@@ -365,12 +380,8 @@
                           (filter (fn [[k v]] (not (contains? all-externs k)))
                                   (:externs @env/*compiler*)))]
     (with-out-str
-      (doseq [[[name] ast-node] (filter (fn [[k v]] (= (count k) 1)) new-externs)]
-        (print (str "var " name " = {};")))
-      (doseq [[k ast-node] (filter (fn [[k v]] (> (count k) 1)) new-externs)]
-        (if (:field ast-node)
-          (print (str (string/join "." k) " = {};"))
-          (print (str (string/join "." k) " = function(){};")))))))
+      (doseq [extern new-externs]
+        (output-extern extern)))))
 
 (defn load-externs
   "Externs are JavaScript files which contain empty definitions of
