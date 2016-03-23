@@ -1181,7 +1181,9 @@
                    :arglists (:arglists sym-meta)
                    :arglists-meta (doall (map meta (:arglists sym-meta)))}))) )
           (when (and fn-var? tag)
-            {:ret-tag tag})))
+            {:ret-tag tag})
+          (when (:extern init-expr)
+            {:extern (:extern init-expr)})))
       (merge
         {:env env
          :op :def
@@ -2120,7 +2122,11 @@
                                      :args argexprs
                                      :children children
                                      :tag tag}))
-        extern (when-let [extern (:extern targetexpr)]
+        extern (when-let [extern (or (:extern targetexpr)
+                                     (when-let [sym (get-in targetexpr [:info :name])]
+                                       (get-in @env/*compiler* [::namespaces (get-in targetexpr [:info :ns])
+                                                                :defs (symbol (name sym))
+                                                                :extern])))]
                  (vec (concat extern (get-extern-properties (or (:field ast-node)
                                                                 (:method ast-node))))))]
     (when extern

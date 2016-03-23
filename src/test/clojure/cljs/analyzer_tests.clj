@@ -339,4 +339,10 @@
 (deftest test-extern
   (is (= (:extern (a/analyze test-env 'js/foo)) ['foo]))
   (is (= (:extern (a/analyze test-env '(.bar js/foo)) ['foo 'bar])))
-  (is (= (:extern (a/analyze test-env '(.-bar js/foo)) ['foo 'bar]))))
+  (is (= (:extern (a/analyze test-env '(.-bar js/foo)) ['foo 'bar])))
+  (is (= (get-in (a/analyze test-env '(do (def bar (.-baz js/foo)) (.-bam bar)))
+                 [:ret :extern]))
+      ['foo 'baz' 'bam])
+  (is (= (get-in (a/analyze test-env '(do (def bar (.-baz js/foo)) (.bam bar)))
+                 [:ret :extern]))
+      ['foo 'baz' 'bam]))
